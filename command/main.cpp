@@ -5,11 +5,6 @@
 #include "reaper_plugin.h" 
 #include "reaper_plugin_functions.h"
 
-#include <chrono>
-#include <thread>
-#include <fstream>
-
-
 
 
 // 1: In project properties/General/Windows SDK Version: change the Windows SDK Version to your version.
@@ -21,6 +16,8 @@
 std::string logpath = "C:/Users/User/Desktop/log.txt";
 
 
+std::default_random_engine generator;
+std::uniform_real_distribution<double> distribution(0.0, 1.0);
 
 
 void log(std::string str) {
@@ -81,6 +78,68 @@ void setSelection(double start, double end) {
 	//isLoop, auto seek - doesn't understand the effect
 	GetSet_LoopTimeRange2(nullptr, true, false, &start, &end, false);
 }
+
+class Item {
+	MediaItem* item;
+	char buf[128];
+
+public:
+	Item(MediaItem* i) {
+		item = i;
+	}
+
+	MediaItem* getItem() {
+		return item;
+	}
+
+	bool getMute() {
+		return GetMediaItemInfo_Value(item, "B_MUTE") != 0;
+	}
+
+	void setMute(bool mute) {
+		SetMediaItemInfo_Value(item, "B_MUTE", static_cast<double>(mute));
+	}
+
+	double getVolume() {
+		return GetMediaItemInfo_Value(item, "D_VOL");
+	}
+
+	void setVolume(double volume) {
+		SetMediaItemInfo_Value(item, "D_VOL", volume);
+	}
+
+	double getPosition() {
+		return GetMediaItemInfo_Value(item, "D_POSITION");
+	}
+
+	void setPosition(double position) {
+		SetMediaItemInfo_Value(item, "D_POSITION", position);
+	}
+
+	double getLength() {
+		return GetMediaItemInfo_Value(item, "D_LENGTH");
+	}
+
+	void setLength(double length) {
+		SetMediaItemInfo_Value(item, "D_LENGTH", length);
+	}
+
+	double getFadeInLength() {
+		return GetMediaItemInfo_Value(item, "D_FADEINLEN");
+	}
+
+	void setFadeInLength(double length) {
+		SetMediaItemInfo_Value(item, "D_FADEINLEN", length);
+	}
+
+	double getFadeOutLength() {
+		return GetMediaItemInfo_Value(item, "D_FADEOUTLEN");
+	}
+
+	void setFadeOutLength(double length) {
+		SetMediaItemInfo_Value(item, "D_FADEOUTLEN", length);
+	}
+};
 
 class Track {
 	MediaTrack* track;
@@ -481,7 +540,51 @@ public:
 	void addFX(std::string fxname) {
 		TrackFX_AddByName(track, fxname.c_str(), false, -1); // -1: always instansiate
 	}
+
+	void armMidiInput() {
+		Input input;
+		input.type = InputType::MIDI;
+		input.midiHardware = MidiHardware::hw3; // my midi controller lives here.
+		setRecordInput(input);
+		setRecordMonitor(RecordMonitor::normal);
+		setRecordArmed(true);
+	}
 };
+
+void filterTrackList(std::function<bool(Track)> compareFunc) {
+	for (int i = 0, trackCount = CountTracks(nullptr); i < trackCount; i++) {
+		Track t{ i };
+		if (compareFunc(t)) {
+			t.setShowInTCP(true);
+		} else {
+			t.setShowInTCP(false);
+		}
+	}
+
+}
+
+void filterMixer(std::function<bool(Track)> compareFunc) {
+	for (int i = 0, trackCount = CountTracks(nullptr); i < trackCount; i++) {
+		Track t{ i };
+		if (compareFunc(t)) {
+			t.setShowInMixer(true);
+		} else {
+			t.setShowInMixer(false);
+		}
+	}
+}
+
+/*
+This is a good starting point for entering API commands.
+No need to call API functions like undo/preventUI/update/tracklist_adjust, as the enclosing code takes care of that.
+*/
+void command() {
+	for (int i = 0, count = CountSelectedMediaItems(nullptr); i < count; i++) {
+		Item item{ GetSelectedMediaItem(nullptr, i) };
+		item.setFadeInLength(0);
+		item.setFadeOutLength(0);
+	}
+}
 
 extern "C" 
 {
@@ -491,12 +594,15 @@ extern "C"
 		Undo_BeginBlock();
 		PreventUIRefresh(1);
 
-		Track t{ GetSelectedTrack2(nullptr, 0, false) };
-		t.addFX("ReaEQ");
+
+		command();
+
+
+		TrackList_AdjustWindows(false);
+		UpdateArrange();
+		UpdateTimeline();
 
 		PreventUIRefresh(-1);
-		//UpdateTimeline();
-		//UpdateArrange();
 		Undo_EndBlock("command.dll", 0);
 	}
 }
