@@ -9,9 +9,23 @@
 #include <thread>
 #include <fstream>
 
+
+
+
+// 1: In project properties/General/Windows SDK Version: change the Windows SDK Version to your version.
+
+// 2: In project properties/Build Events/Post-Build Event: change the path to where "extension" expects the dll.
+// It should be named command.dll, for now!
+
+// 3: (optional) If you need simple logging, change the log.txt path
+std::string logpath = "C:/Users/User/Desktop/log.txt";
+
+
+
+
 void log(std::string str) {
 	std::ofstream outfile;
-	outfile.open("C:/Users/User/Desktop/log.txt", std::ios::app);
+	outfile.open(logpath.c_str(), std::ios::app);
 	outfile << str << std::endl;
 }
 
