@@ -55,6 +55,9 @@ enum class InputType { none, audio, rearoute, MIDI };
 enum class MidiChannel { omni = 0, ch1, ch2, ch3, ch4, ch5, ch6, ch7, ch8, ch9, ch10, ch11, ch12, ch13, ch14, ch15, ch16 };
 enum class MidiHardware { hw0 = 0, hw1, hw2, hw3, hw4, hw5, hw6, hw7, hw8, vkb = 62, all = 63 };
 enum class PanMode { classic3_x = 0, newBalance = 3, stereoPan = 5, dualPan = 6 };
+enum class ChannelMode { normal=0, reverseStereo, downmix, left, right };
+enum class SOLO { not_soloed, solo, soloed_in_place };
+enum class SourceType { wave, midi };
 
 class Input {
 public:
@@ -65,7 +68,6 @@ public:
 	MidiHardware midiHardware = MidiHardware::all;
 };
 
-enum class SOLO { not_soloed, solo, soloed_in_place };
 
 std::tuple<double, double> getSelection() {
 	double start;
@@ -78,6 +80,193 @@ void setSelection(double start, double end) {
 	//isLoop, auto seek - doesn't understand the effect
 	GetSet_LoopTimeRange2(nullptr, true, false, &start, &end, false);
 }
+
+class PCMSource {
+	PCM_source* source;
+	static constexpr int bufsize = 256;
+	char buf[bufsize];
+
+public:
+	PCMSource(PCM_source* src) {
+		source = src;
+	}
+
+	PCMSource(std::string path) {
+		source = PCM_Source_CreateFromFileEx(path.c_str(), false);
+	}
+
+	PCMSource(SourceType type) {
+		if (type == SourceType::midi) {
+			source = PCM_Source_CreateFromType("MIDI");
+		} else if (type == SourceType::wave) {
+			source = PCM_Source_CreateFromType("WAVE");
+		}
+	}
+
+	PCM_source* getSource() {
+		return source;
+	}
+
+	// in-project MIDI source has no file name
+	std::string getFilename() {
+		GetMediaSourceFileName(source, buf, bufsize);
+		return std::string{ buf };
+	}
+
+	double getLength() {
+		bool qn;
+		return GetMediaSourceLength(source, &qn);
+	}
+
+	int getNumChannels() {
+		return static_cast<int>(GetMediaSourceNumChannels(source));
+	}
+
+	PCMSource getParentSource() {
+		return PCMSource{ GetMediaSourceParent(source) };
+	}
+
+	int getSampleRate() {
+		return GetMediaSourceSampleRate(source);
+	}
+
+	SourceType getSourceType() {
+		GetMediaSourceType(source, buf, bufsize);
+		std::string type{ buf };
+		if (type.compare("WAV")) {
+			return SourceType::wave;
+		} else if (type.compare("MIDI")) {
+			return SourceType::midi;
+		}
+	}
+};
+
+class Take {
+	MediaItem_Take* take;
+	char buf[128];
+
+public:
+	Take(MediaItem_Take* t) {
+		take = t;
+	}
+
+	MediaItem_Take* getTake() {
+		return take;
+	}
+
+	std::string getName() {
+		auto name = GetTakeName(take);
+		return std::string{ name };
+	}
+
+	double getVolume() {
+		return GetMediaItemTakeInfo_Value(take, "D_VOL");
+	}
+
+	void setVolume(double volume) {
+		SetMediaItemTakeInfo_Value(take, "D_VOL", volume);
+	}
+
+	double getPan() {
+		return GetMediaItemTakeInfo_Value(take, "D_PAN");
+	}
+
+	void setPan(double pan) {
+		SetMediaItemTakeInfo_Value(take, "D_PAN", pan);
+	}
+
+	double getPanLaw() {
+		return GetMediaItemTakeInfo_Value(take, "D_PANLAW");
+	}
+
+	void setPanLaw(double panLaw) {
+		SetMediaItemTakeInfo_Value(take, "D_`PANLAW", panLaw);
+	}
+
+	double getPlayRate() {
+		return GetMediaItemTakeInfo_Value(take, "D_PLAYRATE");
+	}
+
+	void setPlayRate(double playRate) {
+		SetMediaItemTakeInfo_Value(take, "D_PLAYRATE", playRate);
+	}
+
+	double getPitch() {
+		return GetMediaItemTakeInfo_Value(take, "D_PITCH");
+	}
+
+	void setPitch(double pitch) {
+		SetMediaItemTakeInfo_Value(take, "D_PITCH", pitch);
+	}
+
+	double getStartOffset() {
+		return GetMediaItemTakeInfo_Value(take, "D_STARTOFFS");
+	}
+
+	void setStartOffset(double offset) {
+		SetMediaItemTakeInfo_Value(take, "D_STARTOFFS", offset);
+	}
+
+	bool getPreservePitch() {
+		return GetMediaItemTakeInfo_Value(take, "B_PPITCH") != 0;
+	}
+
+	// preserve pitch when changing rate
+	void setPreservePitch(bool preservePitch) {
+		SetMediaItemTakeInfo_Value(take, "B_PPITCH", static_cast<double>(preservePitch));
+	}
+
+	ChannelMode getChannelMode() {
+		return static_cast<ChannelMode>(static_cast<int>(GetMediaItemTakeInfo_Value(take, "I_CHANMODE")));
+	}
+
+	void setChannelMode(ChannelMode mode) {
+		SetMediaItemTakeInfo_Value(take, "I_CHANMODE", static_cast<double>(mode));
+	}
+
+	// probe the return values to create an enum class directly rather than doing bit arithmetic
+	int getPitchShifterMode() {
+		static_cast<int>(GetMediaItemTakeInfo_Value(take, "I_PITCHMODE"));
+	}
+
+	void setFadeOutLength(double length) {
+		SetMediaItemTakeInfo_Value(take, "D_FADEOUTLEN", length);
+	}
+
+	std::tuple<int, int, int> getCustomColor() {
+		int color = static_cast<int>(GetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR"));
+		int r, g, b;
+		ColorFromNative(color, &r, &g, &b);
+		return std::make_tuple(r, g, b);
+	}
+
+	void setCustomColor(int r, int g, int b) {
+		SetMediaItemTakeInfo_Value(take, "I_CUSTOMCOLOR", static_cast<double>(ColorToNative(r, g, b) | 0x1000000)); // 'or' the 21st bit
+	}
+
+	int getTakeNumber() {
+		return static_cast<int>(GetMediaItemTakeInfo_Value(take, "IP_TAKENUMBER"));
+	}
+
+	// declare Item!
+	/*Item getParentItem() {
+		return Item{ GetMediaItemTake_Item(take) };
+	}*/
+
+	// declare Track!
+	/*Track getParentTrack() {
+		return Track{ GetMediaItemTake_Track(take) };
+	}*/
+
+
+	PCMSource getSource() {
+		return PCMSource{ GetMediaItemTake_Source(take) };
+	}
+
+	void setSource(PCMSource source) {
+		SetMediaItemTake_Source(take, source.getSource());
+	}
+};
 
 class Item {
 	MediaItem* item;
@@ -100,6 +289,38 @@ public:
 		SetMediaItemInfo_Value(item, "B_MUTE", static_cast<double>(mute));
 	}
 
+	bool getLock() {
+		return GetMediaItemInfo_Value(item, "C_LOCK") != 0;
+	}
+
+	void setLock(bool lock) {
+		SetMediaItemInfo_Value(item, "C_LOCK", static_cast<double>(lock));
+	}
+
+	bool getLoopSource() {
+		return GetMediaItemInfo_Value(item, "B_LOOPSRC") != 0;
+	}
+
+	void setLoopSource(bool loopSource) {
+		SetMediaItemInfo_Value(item, "B_LOOPSRC", static_cast<double>(loopSource));
+	}
+
+	bool getPlayAllTakes() {
+		return GetMediaItemInfo_Value(item, "B_ALLTAKESPLAY") != 0;
+	}
+
+	void setPlayAllTakes(bool allTakes) {
+		SetMediaItemInfo_Value(item, "B_ALLTAKESPLAY", static_cast<double>(allTakes));
+	}
+
+	bool getSelected() {
+		return GetMediaItemInfo_Value(item, "B_UISEL") != 0;
+	}
+
+	void setSelected(bool selected) {
+		SetMediaItemInfo_Value(item, "B_UISEL", static_cast<double>(selected));
+	}
+
 	double getVolume() {
 		return GetMediaItemInfo_Value(item, "D_VOL");
 	}
@@ -114,6 +335,14 @@ public:
 
 	void setPosition(double position) {
 		SetMediaItemInfo_Value(item, "D_POSITION", position);
+	}
+
+	double getSnapOffset() {
+		return GetMediaItemInfo_Value(item, "D_SNAPOFFSET");
+	}
+
+	void setSnapOffset(double offset) {
+		SetMediaItemInfo_Value(item, "D_SNAPOFFSET", offset);
 	}
 
 	double getLength() {
@@ -139,6 +368,55 @@ public:
 	void setFadeOutLength(double length) {
 		SetMediaItemInfo_Value(item, "D_FADEOUTLEN", length);
 	}
+
+	std::tuple<int, int, int> getCustomColor() {
+		int color = static_cast<int>(GetMediaItemInfo_Value(item, "I_CUSTOMCOLOR"));
+		int r, g, b;
+		ColorFromNative(color, &r, &g, &b);
+		return std::make_tuple(r, g, b);
+	}
+
+	void setCustomColor(int r, int g, int b) {
+		SetMediaItemInfo_Value(item, "I_CUSTOMCOLOR", static_cast<double>(ColorToNative(r, g, b) | 0x1000000)); // 'or' the 21st bit
+	}
+
+	int getGroupID() {
+		return static_cast<int>(GetMediaItemInfo_Value(item, "I_GROUPID"));
+	}
+
+	void setGroupID(int id) {
+		SetMediaItemInfo_Value(item, "I_GROUPID", static_cast<double>(id));
+	}
+
+	int getCurrentTake() {
+		return static_cast<int>(GetMediaItemInfo_Value(item, "I_CURTAKE"));
+	}
+
+	void setCurrentTake(int takeNumber) {
+		SetMediaItemInfo_Value(item, "I_CURTAKE", static_cast<double>(takeNumber));
+	}
+
+	// gets item number within track
+	int getItemNumber() {
+		return static_cast<int>(GetMediaItemInfo_Value(item, "IP_ITEMNUMBER"));
+	}
+
+	int getNumberOfTakes() {
+		return static_cast<int>(GetMediaItemNumTakes(item));
+	}
+
+	Take getTake(int takeNumber) {
+		return Take{ GetMediaItemTake(item, takeNumber) };
+	}
+
+	// declare Track!
+	/*Track getParentTrack() {
+	return Track{ GetMediaItemTrack(item) };
+	}*/
+};
+
+class TrackEnvelope {
+
 };
 
 class Track {
@@ -156,6 +434,10 @@ public:
 
 	MediaTrack* getTrack() {
 		return track;
+	}
+
+	Track getParentTrack() {
+		return Track{ GetParentTrack(track) };
 	}
 
 	std::string getName() {
@@ -373,8 +655,15 @@ public:
 		SetMediaTrackInfo_Value(track, "I_MIDIHWOUT", val);
 	}
 
+	std::tuple<int, int, int> getCustomColor() {
+		int color = static_cast<int>(GetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR"));
+		int r, g, b;
+		ColorFromNative(color, &r, &g, &b);
+		return std::make_tuple(r, g, b);
+	}
+
 	void setCustomColor(int r, int g, int b) {
-		SetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR", static_cast<double>(ColorToNative(r, g, b) | 0x100000)); // 'or' the 21st bit
+		SetMediaTrackInfo_Value(track, "I_CUSTOMCOLOR", static_cast<double>(ColorToNative(r, g, b) | 0x1000000)); // 'or' the 21st bit
 	}
 
 	int getHeightOverride() {
@@ -579,11 +868,7 @@ This is a good starting point for entering API commands.
 No need to call API functions like undo/preventUI/update/tracklist_adjust, as the enclosing code takes care of that.
 */
 void command() {
-	for (int i = 0, count = CountSelectedMediaItems(nullptr); i < count; i++) {
-		Item item{ GetSelectedMediaItem(nullptr, i) };
-		item.setFadeInLength(0);
-		item.setFadeOutLength(0);
-	}
+	Track{ GetSelectedTrack2(nullptr, 0, false) }.setCustomColor(128, 64, 0);
 }
 
 extern "C" 
